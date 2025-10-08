@@ -41,7 +41,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.0
         env:
           RDS_HOST: ${{ secrets.RDS_HOST }}
-          RDS_DB: ${{ secrets.RDS_DB }}
+          RDS_DB:   ${{ secrets.RDS_DB }}
           RDS_USER: ${{ secrets.RDS_USER }}
           RDS_PASSWORD: ${{ secrets.RDS_PASSWORD }}
         with:
@@ -66,7 +66,7 @@ jobs:
               fi
             done
 
-            # 3) фікси імпортів (з '..' на абсолютні)
+            # 3) фікси імпортів (дві крапки -> абсолютні)
             sed -i \
               -e "s/from \.\.domain\./from domain./g" \
               -e "s/from \.\.domain import /from domain import /g" \
@@ -96,20 +96,19 @@ jobs:
               echo "ERROR: Leftover relative imports (..). Fix needed."; exit 1
             fi
 
-            # 4) мінімальний wsgi.py
-            cat > wsgi.py <<'PY'
-            from __init__ import create_app
-            app = create_app()
-            PY
+            # 4) wsgi.py — БЕЗ heredoc (щоб екшен не насрав у файл)
+            printf '%s\n' \
+              'from __init__ import create_app' \
+              'app = create_app()' > wsgi.py
 
-            # 5) venv + залежності (пін Flask та Flask-RESTful)
+            # 5) venv + залежності
             python3 -m venv .venv || true
             . .venv/bin/activate
             pip install --upgrade pip
             [ -f requirements.txt ] && pip install -r requirements.txt || true
             pip install "Flask==2.3.3" "Flask-RESTful==0.3.10"
 
-            # 6) швидкий імпорт-тест (БЕЗ heredoc до python)
+            # 6) швидкий імпорт-тест (коротка -c, жодних heredoc)
             /home/ubuntu/cars/.venv/bin/python -c 'import sys; sys.path.insert(0,"/home/ubuntu/cars"); from wsgi import app; print("WSGI OK:", bool(app))'
 
             # 7) БД: створення + seed якщо порожня
@@ -122,29 +121,29 @@ jobs:
               echo "DB has ${TABLES_CNT:-?} tables -> skip seed"
             fi
 
-            # 8) systemd unit
-            sudo tee /etc/systemd/system/carsapp.service > /dev/null <<EOF
-            [Unit]
-            Description=Cars Flask App
-            After=network-online.target
-
-            [Service]
-            User=ubuntu
-            WorkingDirectory=/home/ubuntu/cars
-            Environment=PYTHONUNBUFFERED=1
-            Environment=DATABASE_URL=mysql+pymysql://$RDS_USER:$RDS_PASSWORD@$RDS_HOST:3306/$RDS_DB
-            ExecStart=/home/ubuntu/cars/.venv/bin/gunicorn -w 2 -b 0.0.0.0:8010 wsgi:app
-            Restart=always
-
-            [Install]
-            WantedBy=multi-user.target
-            EOF
+            # 8) systemd unit — теж БЕЗ heredoc
+            printf '%s\n' \
+              '[Unit]' \
+              'Description=Cars Flask App' \
+              'After=network-online.target' \
+              '' \
+              '[Service]' \
+              'User=ubuntu' \
+              'WorkingDirectory=/home/ubuntu/cars' \
+              'Environment=PYTHONUNBUFFERED=1' \
+              "Environment=DATABASE_URL=mysql+pymysql://$RDS_USER:$RDS_PASSWORD@$RDS_HOST:3306/$RDS_DB" \
+              'ExecStart=/home/ubuntu/cars/.venv/bin/gunicorn -w 2 -b 0.0.0.0:8010 wsgi:app' \
+              'Restart=always' \
+              '' \
+              '[Install]' \
+              'WantedBy=multi-user.target' \
+              | sudo tee /etc/systemd/system/carsapp.service > /dev/null
 
             sudo systemctl daemon-reload
             sudo systemctl enable carsapp
             sudo systemctl restart carsapp
 
-            # 9) healthcheck + логи (не фейлить джобу)
+            # 9) healthcheck + логи
             sleep 1
             curl -sS -I http://127.0.0.1:8010/ || true
             curl -sS http://127.0.0.1:8010/docs | head || true
