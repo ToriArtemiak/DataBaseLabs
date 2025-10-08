@@ -154,10 +154,3 @@ jobs:
             sudo systemctl daemon-reload
             sudo systemctl enable carsapp
             sudo systemctl restart carsapp
-
-            # 10) healthcheck + логи
-            sleep 1
-            curl -sS -I http://127.0.0.1:8010/ || true
-            curl -sS http://127.0.0.1:8010/docs | head || true
-            sudo systemctl --no-pager status carsapp | tail -n 60
-            journalctl -u carsapp --since "2 minutes ago" --no-pager || true
