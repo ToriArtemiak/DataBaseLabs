@@ -16,7 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # (опц.) гарантуємо, що на інстансі є цільова папка
       - name: Prepare remote dir
         uses: appleboy/ssh-action@v1.0.0
         with:
@@ -60,14 +59,14 @@ jobs:
 
             cd /home/ubuntu/cars
 
-            # 2) каталоги як пакети (створюємо __init__.py якщо треба)
+            # 2) каталоги як пакети (__init__.py якщо треба)
             for d in controllers dao domain root service; do
               if [ -d "$d" ] && [ ! -f "$d/__init__.py" ]; then
                 install -m0644 /dev/null "$d/__init__.py"
               fi
             done
 
-            # 3) виправляємо імпорти на абсолютні
+            # 3) фікси імпортів (з '..' на абсолютні)
             sed -i \
               -e "s/from \.\.domain\./from domain./g" \
               -e "s/from \.\.domain import /from domain import /g" \
@@ -103,19 +102,15 @@ jobs:
             app = create_app()
             PY
 
-            # 5) venv + залежності (пін флеш і flask-restful)
+            # 5) venv + залежності (пін Flask та Flask-RESTful)
             python3 -m venv .venv || true
             . .venv/bin/activate
             pip install --upgrade pip
             [ -f requirements.txt ] && pip install -r requirements.txt || true
             pip install "Flask==2.3.3" "Flask-RESTful==0.3.10"
 
-            # 6) швидкий імпорт-тест
-            /home/ubuntu/cars/.venv/bin/python - <<'PY'
-            import sys; sys.path.insert(0, "/home/ubuntu/cars")
-            from wsgi import app
-            print("WSGI OK:", bool(app))
-            PY
+            # 6) швидкий імпорт-тест (БЕЗ heredoc до python)
+            /home/ubuntu/cars/.venv/bin/python -c 'import sys; sys.path.insert(0,"/home/ubuntu/cars"); from wsgi import app; print("WSGI OK:", bool(app))'
 
             # 7) БД: створення + seed якщо порожня
             mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS \`$RDS_DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
@@ -127,7 +122,7 @@ jobs:
               echo "DB has ${TABLES_CNT:-?} tables -> skip seed"
             fi
 
-            # 8) systemd unit (підставляємо значення одразу)
+            # 8) systemd unit
             sudo tee /etc/systemd/system/carsapp.service > /dev/null <<EOF
             [Unit]
             Description=Cars Flask App
