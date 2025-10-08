@@ -1,0 +1,77 @@
+name: Deploy Cars (auto)
+
+on:
+  push:
+    branches: [ lab5 ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload project to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "**"
+          target: "/home/ubuntu/cars"
+          overwrite: true
+          strip_components: 0
+
+      - name: Setup venv, init RDS if empty, write systemd, restart
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: RDS_HOST,RDS_DB,RDS_USER,RDS_PASSWORD
+          script_stop: true
+          script: |
+            set -euo pipefail
+            sudo apt-get update -y
+            sudo apt-get install -y python3-venv python3-pip mysql-client
+
+            cd /home/ubuntu/cars
+            python3 -m venv .venv || true
+            . .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+            # DB create if not exists
+            mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS \`$RDS_DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+            # якщо таблиць немає — застосувати data.sql
+            TABLES_CNT=$(mysql -N -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -D "$RDS_DB" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$RDS_DB';")
+            if [ "$TABLES_CNT" -eq 0 ]; then
+              echo "DB is empty. Applying data.sql..."
+              mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" "$RDS_DB" < data.sql
+            else
+              echo "DB already has $TABLES_CNT tables. Skipping data.sql"
+            fi
+
+            # systemd unit
+            sudo tee /etc/systemd/system/carsapp.service > /dev/null <<EOFUNIT
+            [Unit]
+            Description=Cars Flask App
+            After=network-online.target
+
+            [Service]
+            User=ubuntu
+            WorkingDirectory=/home/ubuntu/cars
+            Environment=DATABASE_URL=mysql+pymysql://$RDS_USER:$RDS_PASSWORD@$RDS_HOST:3306/$RDS_DB
+            ExecStart=/home/ubuntu/cars/.venv/bin/gunicorn -w 2 -b 0.0.0.0:8010 "wsgi:app"
+            Restart=always
+            Environment=PYTHONUNBUFFERED=1
+
+            [Install]
+            WantedBy=multi-user.target
+            EOFUNIT
+
+            sudo systemctl daemon-reload
+            sudo systemctl enable carsapp
+            sudo systemctl restart carsapp
+            sudo systemctl --no-pager status carsapp | tail -n 80
