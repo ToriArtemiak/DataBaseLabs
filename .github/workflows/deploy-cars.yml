@@ -1,15 +1,31 @@
-name: Deploy Cars ( full auto )
+name: Deploy Cars full auto
 
 on:
   push:
     branches: [ lab5 ]
   workflow_dispatch:
 
+concurrency:
+  group: cars-deploy-lab5
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
+      # (опц.) гарантуємо, що на інстансі є цільова папка
+      - name: Prepare remote dir
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            mkdir -p /home/ubuntu/cars
 
       - name: Upload project to EC2
         uses: appleboy/scp-action@v0.1.7
@@ -22,7 +38,7 @@ jobs:
           overwrite: true
           strip_components: 0
 
-      - name: Setup, patch, seed DB, restart
+      - name: Fix imports, venv, deps, DB, systemd, restart
         uses: appleboy/ssh-action@v1.0.0
         env:
           RDS_HOST: ${{ secrets.RDS_HOST }}
@@ -44,19 +60,39 @@ jobs:
 
             cd /home/ubuntu/cars
 
-            # 2) каталоги як пакети
+            # 2) каталоги як пакети (створюємо __init__.py якщо треба)
             for d in controllers dao domain root service; do
-              [ -f "$d/__init__.py" ] || install -m0644 /dev/null "$d/__init__.py";
+              if [ -d "$d" ] && [ ! -f "$d/__init__.py" ]; then
+                install -m0644 /dev/null "$d/__init__.py"
+              fi
             done
 
             # 3) виправляємо імпорти на абсолютні
-            sed -i "s/from \.\.domain\./from domain./g; s/from \.\.domain import /from domain import /g" root/*.py service/*.py dao/*.py controllers/*.py 2>/dev/null || true
-            sed -i "s/from \.\.service\./from service./g; s/from \.\.controllers\./from controllers./g; s/from \.\.dao\./from dao./g" root/*.py service/*.py controllers/*.py 2>/dev/null || true
+            sed -i \
+              -e "s/from \.\.domain\./from domain./g" \
+              -e "s/from \.\.domain import /from domain import /g" \
+              root/*.py service/*.py dao/*.py controllers/*.py 2>/dev/null || true
+
+            sed -i \
+              -e "s/from \.\.service\./from service./g" \
+              -e "s/from \.\.service import /from service import /g" \
+              root/*.py service/*.py controllers/*.py 2>/dev/null || true
+
+            sed -i \
+              -e "s/from \.\.controllers\./from controllers./g" \
+              -e "s/from \.\.controllers import /from controllers import /g" \
+              root/*.py service/*.py controllers/*.py 2>/dev/null || true
+
+            sed -i \
+              -e "s/from \.\.dao\./from dao./g" \
+              -e "s/from \.\.dao import /from dao import /g" \
+              root/*.py service/*.py controllers/*.py 2>/dev/null || true
+
             sed -i "s/from \.\. import db/from __init__ import db/g" root/*.py service/*.py 2>/dev/null || true
             grep -RIl --include="*.py" "from app import db" . | xargs -r sed -i "s/from app import db/from __init__ import db/g"
-            sed -i "s/from app\.root import register_routes/from root import register_routes/" __init__.py
+            sed -i "s/from app\.root import register_routes/from root import register_routes/" __init__.py 2>/dev/null || true
 
-            # фейлимо, якщо лишились подвійні крапки у імпортах
+            # фейлимо, якщо ще лишились подвійні крапки у імпортах
             if grep -RIn --include="*.py" "from \.\." . | grep -v "/\.venv/" ; then
               echo "ERROR: Leftover relative imports (..). Fix needed."; exit 1
             fi
@@ -67,23 +103,23 @@ jobs:
             app = create_app()
             PY
 
-            # 5) venv + залежності (гарантуємо сумісні версії)
+            # 5) venv + залежності (пін флеш і flask-restful)
             python3 -m venv .venv || true
             . .venv/bin/activate
             pip install --upgrade pip
             [ -f requirements.txt ] && pip install -r requirements.txt || true
             pip install "Flask==2.3.3" "Flask-RESTful==0.3.10"
 
-            # швидкий імпорт-тест, щоб впасти тут, а не у systemd
+            # 6) швидкий імпорт-тест
             /home/ubuntu/cars/.venv/bin/python - <<'PY'
             import sys; sys.path.insert(0, "/home/ubuntu/cars")
             from wsgi import app
             print("WSGI OK:", bool(app))
             PY
 
-            # 6) БД: створення + початкові дані (якщо порожня)
+            # 7) БД: створення + seed якщо порожня
             mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS \`$RDS_DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-            TABLES_CNT=$(mysql -N -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -D "$RDS_DB" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$RDS_DB';")
+            TABLES_CNT=$(mysql -N -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -D "$RDS_DB" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$RDS_DB';" || echo 0)
             if [ "${TABLES_CNT:-0}" -eq 0 ] && [ -f data.sql ]; then
               echo "DB empty -> applying data.sql"
               mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" "$RDS_DB" < data.sql
@@ -91,7 +127,7 @@ jobs:
               echo "DB has ${TABLES_CNT:-?} tables -> skip seed"
             fi
 
-            # 7) systemd unit
+            # 8) systemd unit (підставляємо значення одразу)
             sudo tee /etc/systemd/system/carsapp.service > /dev/null <<EOF
             [Unit]
             Description=Cars Flask App
@@ -113,9 +149,9 @@ jobs:
             sudo systemctl enable carsapp
             sudo systemctl restart carsapp
 
-            # 8) простий healthcheck + свіжі логи
+            # 9) healthcheck + логи (не фейлить джобу)
             sleep 1
             curl -sS -I http://127.0.0.1:8010/ || true
             curl -sS http://127.0.0.1:8010/docs | head || true
-            sudo systemctl --no-pager status carsapp | tail -n 40
+            sudo systemctl --no-pager status carsapp | tail -n 60
             journalctl -u carsapp --since "2 minutes ago" --no-pager || true
