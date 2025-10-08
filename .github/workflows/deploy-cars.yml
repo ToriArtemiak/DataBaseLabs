@@ -1,4 +1,4 @@
-name: Deploy Cars (auto)
+name: Deploy Cars ( full auto )
 
 on:
   push:
@@ -22,9 +22,9 @@ jobs:
           overwrite: true
           strip_components: 0
 
-      - name: Setup venv, init RDS if empty, write systemd, restart
+      - name: Setup, patch, seed DB, restart
         uses: appleboy/ssh-action@v1.0.0
-        env:                               # <- ❶ МАПИМО СЕКРЕТИ У ENV ДЛЯ СТЕПУ
+        env:
           RDS_HOST: ${{ secrets.RDS_HOST }}
           RDS_DB: ${{ secrets.RDS_DB }}
           RDS_USER: ${{ secrets.RDS_USER }}
@@ -33,60 +33,89 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: RDS_HOST,RDS_DB,RDS_USER,RDS_PASSWORD   # <- ❷ ПЕРЕДАЄМО У КОНТЕЙНЕР ЕКШЕНУ
+          envs: RDS_HOST,RDS_DB,RDS_USER,RDS_PASSWORD
           script_stop: true
           script: |
             set -euo pipefail
-
-            # 0) sanity-check (без друку секретів)
-            : "${RDS_HOST:?missing RDS_HOST}"
-            : "${RDS_DB:?missing RDS_DB}"
-            : "${RDS_USER:?missing RDS_USER}"
-            : "${RDS_PASSWORD:?missing RDS_PASSWORD}"
 
             # 1) базові пакети
             sudo apt-get update -y
             sudo apt-get install -y python3-venv python3-pip mysql-client
 
-            # 2) venv + залежності
             cd /home/ubuntu/cars
+
+            # 2) каталоги як пакети
+            for d in controllers dao domain root service; do
+              [ -f "$d/__init__.py" ] || install -m0644 /dev/null "$d/__init__.py";
+            done
+
+            # 3) виправляємо імпорти на абсолютні
+            sed -i "s/from \.\.domain\./from domain./g; s/from \.\.domain import /from domain import /g" root/*.py service/*.py dao/*.py controllers/*.py 2>/dev/null || true
+            sed -i "s/from \.\.service\./from service./g; s/from \.\.controllers\./from controllers./g; s/from \.\.dao\./from dao./g" root/*.py service/*.py controllers/*.py 2>/dev/null || true
+            sed -i "s/from \.\. import db/from __init__ import db/g" root/*.py service/*.py 2>/dev/null || true
+            grep -RIl --include="*.py" "from app import db" . | xargs -r sed -i "s/from app import db/from __init__ import db/g"
+            sed -i "s/from app\.root import register_routes/from root import register_routes/" __init__.py
+
+            # фейлимо, якщо лишились подвійні крапки у імпортах
+            if grep -RIn --include="*.py" "from \.\." . | grep -v "/\.venv/" ; then
+              echo "ERROR: Leftover relative imports (..). Fix needed."; exit 1
+            fi
+
+            # 4) мінімальний wsgi.py
+            cat > wsgi.py <<'PY'
+            from __init__ import create_app
+            app = create_app()
+            PY
+
+            # 5) venv + залежності (гарантуємо сумісні версії)
             python3 -m venv .venv || true
             . .venv/bin/activate
             pip install --upgrade pip
-            pip install -r requirements.txt
+            [ -f requirements.txt ] && pip install -r requirements.txt || true
+            pip install "Flask==2.3.3" "Flask-RESTful==0.3.10"
 
-            # 3) створення БД (idempotent)
+            # швидкий імпорт-тест, щоб впасти тут, а не у systemd
+            /home/ubuntu/cars/.venv/bin/python - <<'PY'
+            import sys; sys.path.insert(0, "/home/ubuntu/cars")
+            from wsgi import app
+            print("WSGI OK:", bool(app))
+            PY
+
+            # 6) БД: створення + початкові дані (якщо порожня)
             mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS \`$RDS_DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-
-            # 4) якщо порожня — заливаємо data.sql (твій файл у корені)
             TABLES_CNT=$(mysql -N -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -D "$RDS_DB" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$RDS_DB';")
-            if [ "$TABLES_CNT" -eq 0 ]; then
-              echo "DB is empty. Applying data.sql..."
+            if [ "${TABLES_CNT:-0}" -eq 0 ] && [ -f data.sql ]; then
+              echo "DB empty -> applying data.sql"
               mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" "$RDS_DB" < data.sql
             else
-              echo "DB already has $TABLES_CNT tables. Skipping data.sql"
+              echo "DB has ${TABLES_CNT:-?} tables -> skip seed"
             fi
 
-            # 5) systemd unit (із підстановкою значень одразу)
-            sudo tee /etc/systemd/system/carsapp.service > /dev/null <<EOFUNIT
+            # 7) systemd unit
+            sudo tee /etc/systemd/system/carsapp.service > /dev/null <<EOF
             [Unit]
             Description=Cars Flask App
             After=network-online.target
-            
+
             [Service]
             User=ubuntu
             WorkingDirectory=/home/ubuntu/cars
-            Environment=DATABASE_URL=mysql+pymysql://$RDS_USER:$RDS_PASSWORD@$RDS_HOST:3306/$RDS_DB
-            ExecStart=/home/ubuntu/cars/.venv/bin/gunicorn -w 2 -b 0.0.0.0:8010 "wsgi:app"
-            Restart=always
             Environment=PYTHONUNBUFFERED=1
-            
+            Environment=DATABASE_URL=mysql+pymysql://$RDS_USER:$RDS_PASSWORD@$RDS_HOST:3306/$RDS_DB
+            ExecStart=/home/ubuntu/cars/.venv/bin/gunicorn -w 2 -b 0.0.0.0:8010 wsgi:app
+            Restart=always
+
             [Install]
             WantedBy=multi-user.target
-            EOFUNIT
+            EOF
 
-            # 6) старт
             sudo systemctl daemon-reload
             sudo systemctl enable carsapp
             sudo systemctl restart carsapp
-            sudo systemctl --no-pager status carsapp | tail -n 80
+
+            # 8) простий healthcheck + свіжі логи
+            sleep 1
+            curl -sS -I http://127.0.0.1:8010/ || true
+            curl -sS http://127.0.0.1:8010/docs | head || true
+            sudo systemctl --no-pager status carsapp | tail -n 40
+            journalctl -u carsapp --since "2 minutes ago" --no-pager || true
