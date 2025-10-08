@@ -37,7 +37,7 @@ jobs:
           overwrite: true
           strip_components: 0
 
-      - name: Fix imports, venv, deps, DB, systemd, restart
+      - name: Fix imports, venv, DB, systemd, restart
         uses: appleboy/ssh-action@v1.0.0
         env:
           RDS_HOST: ${{ secrets.RDS_HOST }}
@@ -66,7 +66,13 @@ jobs:
               fi
             done
 
-            # 3) фікси імпортів (дві крапки -> абсолютні)
+            # 3) прибираємо legacy app.py, що ламає імпорти
+            if [ -f app.py ]; then
+              mv -f app.py legacy_app.py
+            fi
+
+            # 4) масові фікси імпортів
+            # 4.1) з '..' на абсолютні
             sed -i \
               -e "s/from \.\.domain\./from domain./g" \
               -e "s/from \.\.domain import /from domain import /g" \
@@ -88,30 +94,36 @@ jobs:
               root/*.py service/*.py controllers/*.py 2>/dev/null || true
 
             sed -i "s/from \.\. import db/from __init__ import db/g" root/*.py service/*.py 2>/dev/null || true
+
+            # 4.2) прибираємо префікс 'app.' і прямі імпорти з 'app'
+            grep -RIl --include="*.py" "from app\." . | xargs -r sed -i 's/from app\./from /g'
+            grep -RIl --include="*.py" "import app\." . | xargs -r sed -i 's/import app\./import /g'
+            grep -RIl --include="*.py" "^from app import " . | xargs -r sed -i 's/^from app import /from __init__ import /g'
+            # спеціально: db та register_routes, якщо десь лишилось
             grep -RIl --include="*.py" "from app import db" . | xargs -r sed -i "s/from app import db/from __init__ import db/g"
             sed -i "s/from app\.root import register_routes/from root import register_routes/" __init__.py 2>/dev/null || true
 
-            # фейлимо, якщо ще лишились подвійні крапки у імпортах
+            # 4.3) перевірка: не повинно лишитись 'from ..'
             if grep -RIn --include="*.py" "from \.\." . | grep -v "/\.venv/" ; then
               echo "ERROR: Leftover relative imports (..). Fix needed."; exit 1
             fi
 
-            # 4) wsgi.py — БЕЗ heredoc (щоб екшен не насрав у файл)
+            # 5) wsgi.py — БЕЗ heredoc
             printf '%s\n' \
               'from __init__ import create_app' \
               'app = create_app()' > wsgi.py
 
-            # 5) venv + залежності
+            # 6) venv + залежності
             python3 -m venv .venv || true
             . .venv/bin/activate
             pip install --upgrade pip
             [ -f requirements.txt ] && pip install -r requirements.txt || true
             pip install "Flask==2.3.3" "Flask-RESTful==0.3.10"
 
-            # 6) швидкий імпорт-тест (коротка -c, жодних heredoc)
+            # 7) швидкий імпорт-тест
             /home/ubuntu/cars/.venv/bin/python -c 'import sys; sys.path.insert(0,"/home/ubuntu/cars"); from wsgi import app; print("WSGI OK:", bool(app))'
 
-            # 7) БД: створення + seed якщо порожня
+            # 8) БД: створення + seed якщо порожня
             mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS \`$RDS_DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
             TABLES_CNT=$(mysql -N -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -D "$RDS_DB" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$RDS_DB';" || echo 0)
             if [ "${TABLES_CNT:-0}" -eq 0 ] && [ -f data.sql ]; then
@@ -121,7 +133,7 @@ jobs:
               echo "DB has ${TABLES_CNT:-?} tables -> skip seed"
             fi
 
-            # 8) systemd unit — теж БЕЗ heredoc
+            # 9) systemd unit — БЕЗ heredoc
             printf '%s\n' \
               '[Unit]' \
               'Description=Cars Flask App' \
@@ -143,7 +155,7 @@ jobs:
             sudo systemctl enable carsapp
             sudo systemctl restart carsapp
 
-            # 9) healthcheck + логи
+            # 10) healthcheck + логи
             sleep 1
             curl -sS -I http://127.0.0.1:8010/ || true
             curl -sS http://127.0.0.1:8010/docs | head || true
