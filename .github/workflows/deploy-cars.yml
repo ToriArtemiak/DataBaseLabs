@@ -71,37 +71,37 @@ jobs:
               mv -f app.py legacy_app.py
             fi
 
-            # 4) масові фікси імпортів
-            # 4.1) з '..' на абсолютні
-            sed -i \
-              -e "s/from \.\.domain\./from domain./g" \
-              -e "s/from \.\.domain import /from domain import /g" \
-              root/*.py service/*.py dao/*.py controllers/*.py 2>/dev/null || true
+            # # 4) масові фікси імпортів
+            # # 4.1) з '..' на абсолютні
+            # sed -i \
+            #   -e "s/from \.\.domain\./from domain./g" \
+            #   -e "s/from \.\.domain import /from domain import /g" \
+            #   root/*.py service/*.py dao/*.py controllers/*.py 2>/dev/null || true
 
-            sed -i \
-              -e "s/from \.\.service\./from service./g" \
-              -e "s/from \.\.service import /from service import /g" \
-              root/*.py service/*.py controllers/*.py 2>/dev/null || true
+            # sed -i \
+            #   -e "s/from \.\.service\./from service./g" \
+            #   -e "s/from \.\.service import /from service import /g" \
+            #   root/*.py service/*.py controllers/*.py 2>/dev/null || true
 
-            sed -i \
-              -e "s/from \.\.controllers\./from controllers./g" \
-              -e "s/from \.\.controllers import /from controllers import /g" \
-              root/*.py service/*.py controllers/*.py 2>/dev/null || true
+            # sed -i \
+            #   -e "s/from \.\.controllers\./from controllers./g" \
+            #   -e "s/from \.\.controllers import /from controllers import /g" \
+            #   root/*.py service/*.py controllers/*.py 2>/dev/null || true
 
-            sed -i \
-              -e "s/from \.\.dao\./from dao./g" \
-              -e "s/from \.\.dao import /from dao import /g" \
-              root/*.py service/*.py controllers/*.py 2>/dev/null || true
+            # sed -i \
+            #   -e "s/from \.\.dao\./from dao./g" \
+            #   -e "s/from \.\.dao import /from dao import /g" \
+            #   root/*.py service/*.py controllers/*.py 2>/dev/null || true
 
-            sed -i "s/from \.\. import db/from __init__ import db/g" root/*.py service/*.py 2>/dev/null || true
+            # sed -i "s/from \.\. import db/from __init__ import db/g" root/*.py service/*.py 2>/dev/null || true
 
-            # 4.2) прибираємо префікс 'app.' і прямі імпорти з 'app'
-            grep -RIl --include="*.py" "from app\." . | xargs -r sed -i 's/from app\./from /g'
-            grep -RIl --include="*.py" "import app\." . | xargs -r sed -i 's/import app\./import /g'
-            grep -RIl --include="*.py" "^from app import " . | xargs -r sed -i 's/^from app import /from __init__ import /g'
-            # спеціально: db та register_routes, якщо десь лишилось
-            grep -RIl --include="*.py" "from app import db" . | xargs -r sed -i "s/from app import db/from __init__ import db/g"
-            sed -i "s/from app\.root import register_routes/from root import register_routes/" __init__.py 2>/dev/null || true
+            # # 4.2) прибираємо префікс 'app.' і прямі імпорти з 'app'
+            # grep -RIl --include="*.py" "from app\." . | xargs -r sed -i 's/from app\./from /g'
+            # grep -RIl --include="*.py" "import app\." . | xargs -r sed -i 's/import app\./import /g'
+            # grep -RIl --include="*.py" "^from app import " . | xargs -r sed -i 's/^from app import /from __init__ import /g'
+            # # спеціально: db та register_routes, якщо десь лишилось
+            # grep -RIl --include="*.py" "from app import db" . | xargs -r sed -i "s/from app import db/from __init__ import db/g"
+            # sed -i "s/from app\.root import register_routes/from root import register_routes/" __init__.py 2>/dev/null || true
 
             # 4.3) перевірка: не повинно лишитись 'from ..'
             if grep -RIn --include="*.py" "from \.\." . | grep -v "/\.venv/" ; then
