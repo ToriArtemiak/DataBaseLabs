@@ -17,6 +17,9 @@ def create_app():
     migrate.init_app(app, db)
 
     from app.root import register_routes
+    from root.autodoc import openapi_bp, swagger_ui_bp
+    app.register_blueprint(openapi_bp)
+    app.register_blueprint(swagger_ui_bp, url_prefix="/docs")
     register_routes(app)
 
     return app
