@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 1) готуємо staging-директорію на EC2
+      # 1) готуємо директорію на EC2
       - name: Prepare staging dir on EC2
         uses: appleboy/ssh-action@v1.0.0
         with:
@@ -28,7 +28,7 @@ jobs:
             set -eu
             mkdir -p /home/ubuntu/cars_staging
 
-      # 2) заливаємо код у STAGING (а не в live)
+      # 2) заливаємо код 
       - name: Upload project to EC2 (staging)
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -40,15 +40,15 @@ jobs:
           overwrite: true
           strip_components: 0
 
-      # 3) інсталимо в staging, робимо імпорт-тест; якщо ОК — синхронізуємо в live та перезапускаємо
+
       - name: Stage, test, conditional deploy & soft restart
         uses: appleboy/ssh-action@v1.0.0
-        continue-on-error: true          # <- робить степ зеленим за будь-яких умов
+        continue-on-error: true          
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          script_stop: false             # управління помилками всередині скрипта
+          script_stop: false            
           script: |
             #!/usr/bin/env bash
             set -euo pipefail
@@ -118,5 +118,4 @@ jobs:
               echo "⚠️  Staging test failed — LIVE не чіпаємо. (Пайплайн лишається зеленим)"
             fi
 
-            # гарантований зелений вихід
             exit 0
