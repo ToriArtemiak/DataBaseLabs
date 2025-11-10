@@ -1,121 +1,121 @@
-name: Deploy Cars full aouto
+# name: Deploy Cars full aouto
 
-on:
-  push:
-    branches: [ lab5 ]
-  workflow_dispatch:
+# on:
+#   push:
+#     branches: [ lab5 ]
+#   workflow_dispatch:
 
-concurrency:
-  group: cars-deploy-lab5
-  cancel-in-progress: true
+# concurrency:
+#   group: cars-deploy-lab5
+#   cancel-in-progress: true
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+# jobs:
+#   deploy:
+#     runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v4
+#     steps:
+#       - uses: actions/checkout@v4
 
-      # 1) готуємо директорію на EC2
-      - name: Prepare staging dir on EC2
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script_stop: true
-          script: |
-            set -eu
-            mkdir -p /home/ubuntu/cars_staging
+#       # 1) готуємо директорію на EC2
+#       - name: Prepare staging dir on EC2
+#         uses: appleboy/ssh-action@v1.0.0
+#         with:
+#           host: ${{ secrets.EC2_HOST }}
+#           username: ${{ secrets.EC2_USER }}
+#           key: ${{ secrets.EC2_SSH_KEY }}
+#           script_stop: true
+#           script: |
+#             set -eu
+#             mkdir -p /home/ubuntu/cars_staging
 
-      # 2) заливаємо код 
-      - name: Upload project to EC2 (staging)
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: "**"
-          target: "/home/ubuntu/cars_staging"
-          overwrite: true
-          strip_components: 0
+#       # 2) заливаємо код 
+#       - name: Upload project to EC2 (staging)
+#         uses: appleboy/scp-action@v0.1.7
+#         with:
+#           host: ${{ secrets.EC2_HOST }}
+#           username: ${{ secrets.EC2_USER }}
+#           key: ${{ secrets.EC2_SSH_KEY }}
+#           source: "**"
+#           target: "/home/ubuntu/cars_staging"
+#           overwrite: true
+#           strip_components: 0
 
 
-      - name: Stage, test, conditional deploy & soft restart
-        uses: appleboy/ssh-action@v1.0.0
-        continue-on-error: true          
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script_stop: false            
-          script: |
-            #!/usr/bin/env bash
-            set -euo pipefail
+#       - name: Stage, test, conditional deploy & soft restart
+#         uses: appleboy/ssh-action@v1.0.0
+#         continue-on-error: true          
+#         with:
+#           host: ${{ secrets.EC2_HOST }}
+#           username: ${{ secrets.EC2_USER }}
+#           key: ${{ secrets.EC2_SSH_KEY }}
+#           script_stop: false            
+#           script: |
+#             #!/usr/bin/env bash
+#             set -euo pipefail
 
-            STAGE_DIR="/home/ubuntu/cars_staging"
-            LIVE_DIR="/home/ubuntu/cars"
+#             STAGE_DIR="/home/ubuntu/cars_staging"
+#             LIVE_DIR="/home/ubuntu/cars"
 
-            echo "::group::Install system packages"
-            sudo apt-get update -y
-            sudo apt-get install -y python3-venv python3-pip rsync curl
-            echo "::endgroup::"
+#             echo "::group::Install system packages"
+#             sudo apt-get update -y
+#             sudo apt-get install -y python3-venv python3-pip rsync curl
+#             echo "::endgroup::"
 
-            echo "::group::Prepare venv in STAGING"
-            cd "$STAGE_DIR"
-            python3 -m venv .venv || true
-            . .venv/bin/activate
-            pip install --upgrade pip
-            if [ -f requirements.txt ]; then
-              pip install -r requirements.txt || true
-            fi
-            echo "::endgroup::"
+#             echo "::group::Prepare venv in STAGING"
+#             cd "$STAGE_DIR"
+#             python3 -m venv .venv || true
+#             . .venv/bin/activate
+#             pip install --upgrade pip
+#             if [ -f requirements.txt ]; then
+#               pip install -r requirements.txt || true
+#             fi
+#             echo "::endgroup::"
 
-            echo "::group::WSGI import test (STAGING)"
-            set +e
-            "$STAGE_DIR/.venv/bin/python" -c 'import sys,traceback; sys.path.insert(0,"/home/ubuntu/cars_staging");
-            try:
-                from wsgi import app
-                print("WSGI OK:", bool(app))
-                rc = 0
-            except Exception as e:
-                print("WSGI IMPORT FAILED:", e)
-                traceback.print_exc()
-                rc = 1
-            import sys as _s; _s.exit(rc)'
-                        TEST_RC=$?
-                        set -e
-                        echo "::endgroup::"
+#             echo "::group::WSGI import test (STAGING)"
+#             set +e
+#             "$STAGE_DIR/.venv/bin/python" -c 'import sys,traceback; sys.path.insert(0,"/home/ubuntu/cars_staging");
+#             try:
+#                 from wsgi import app
+#                 print("WSGI OK:", bool(app))
+#                 rc = 0
+#             except Exception as e:
+#                 print("WSGI IMPORT FAILED:", e)
+#                 traceback.print_exc()
+#                 rc = 1
+#             import sys as _s; _s.exit(rc)'
+#                         TEST_RC=$?
+#                         set -e
+#                         echo "::endgroup::"
 
-            if [ "$TEST_RC" -eq 0 ]; then
-              echo "::group::Deploying to LIVE (rsync) & restart"
-              # бекапимо live на всяк випадок
-              sudo tar -czf "/home/ubuntu/cars_backup_$(date +%F_%H%M%S).tgz" -C /home/ubuntu cars || true
+#             if [ "$TEST_RC" -eq 0 ]; then
+#               echo "::group::Deploying to LIVE (rsync) & restart"
+#               # бекапимо live на всяк випадок
+#               sudo tar -czf "/home/ubuntu/cars_backup_$(date +%F_%H%M%S).tgz" -C /home/ubuntu cars || true
 
-              # синхронізація у live; venv не перетягуємо
-              rsync -a --delete --exclude ".venv" "$STAGE_DIR/" "$LIVE_DIR/"
+#               # синхронізація у live; venv не перетягуємо
+#               rsync -a --delete --exclude ".venv" "$STAGE_DIR/" "$LIVE_DIR/"
 
-              # оновлюємо venv у live
-              cd "$LIVE_DIR"
-              python3 -m venv .venv || true
-              . .venv/bin/activate
-              pip install --upgrade pip
-              if [ -f requirements.txt ]; then
-                pip install -r requirements.txt || true
-              fi
+#               # оновлюємо venv у live
+#               cd "$LIVE_DIR"
+#               python3 -m venv .venv || true
+#               . .venv/bin/activate
+#               pip install --upgrade pip
+#               if [ -f requirements.txt ]; then
+#                 pip install -r requirements.txt || true
+#               fi
 
-              # м’який рестарт сервісу (unit не чіпаємо)
-              sudo systemctl daemon-reload || true
-              sudo systemctl restart carsapp || true
+#               # м’який рестарт сервісу (unit не чіпаємо)
+#               sudo systemctl daemon-reload || true
+#               sudo systemctl restart carsapp || true
 
-              # легкий healthcheck (без фейлу)
-              sleep 1
-              curl -sS -I http://127.0.0.1:8010/ || true
-              sudo systemctl --no-pager status carsapp | tail -n 60 || true
-              echo "::endgroup::"
-              echo "✅ Deploy finished: staging test passed, live updated."
-            else
-              echo "⚠️  Staging test failed — LIVE не чіпаємо. (Пайплайн лишається зеленим)"
-            fi
+#               # легкий healthcheck (без фейлу)
+#               sleep 1
+#               curl -sS -I http://127.0.0.1:8010/ || true
+#               sudo systemctl --no-pager status carsapp | tail -n 60 || true
+#               echo "::endgroup::"
+#               echo "✅ Deploy finished: staging test passed, live updated."
+#             else
+#               echo "⚠️  Staging test failed — LIVE не чіпаємо. (Пайплайн лишається зеленим)"
+#             fi
 
-            exit 0
+#             exit 0
