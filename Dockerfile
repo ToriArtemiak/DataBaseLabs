@@ -1,5 +1,4 @@
 FROM python:3.11-slim
-
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -9,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && \
     pip install --no-cache-dir gunicorn pymysql
-
 
 COPY . /app/
 
@@ -30,9 +28,9 @@ def patch(path, rules):
 for pkg in ["controllers","dao","domain","service","root"]:
     d = os.path.join("/app", pkg)
     if os.path.isdir(d):
-        init_p = os.path.join(d, "__init__.py")
-        if not os.path.exists(init_p):
-            open(init_p, "w").close()
+        ip = os.path.join(d, "__init__.py")
+        if not os.path.exists(ip):
+            open(ip, "w").close()
 
 for f in ["/app/wsgi.py", "/app/app.py"]:
     if os.path.exists(f):
@@ -61,14 +59,20 @@ for root, _, files in os.walk("/app"):
             (r'\bimport\s+app\.service\b',     'import service'),
         ])
 
+for root, _, files in os.walk("/app"):
+    for name in files:
+        if not name.endswith(".py"): continue
+        p = os.path.join(root, name)
+        patch(p, [
+            (r'\bfrom\s+app\s+import\s+db\b', 'from __init__ import db'),
+        ])
+
 PKGS = ["controllers","service","dao","domain","root"]
 for root, _, files in os.walk("/app"):
     for name in files:
         if not name.endswith(".py"): continue
         p = os.path.join(root, name)
-        rules = []
-        for pkg in PKGS:
-            rules.append( (rf'from\s+\.\.\s*{pkg}\s+import\s+', f'from {pkg} import ') )
+        rules = [(rf'from\s+\.\.\s*{pkg}\s+import\s+', f'from {pkg} import ') for pkg in PKGS]
         patch(p, rules)
 
 f = "/app/root/__init__.py"
@@ -78,5 +82,4 @@ PY
 
 ENV PORT=8000
 EXPOSE 8000
-
 CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8000", "wsgi:app"]
