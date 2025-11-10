@@ -3,7 +3,7 @@ name: Lab5 (app + infra + autoscale + loadgen)
 on:
   push:
     branches: ["lab5"]
-
+ 
 env:
   AWS_REGION: eu-central-1
   RDS_ID: database-1
