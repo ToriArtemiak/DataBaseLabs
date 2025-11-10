@@ -9,7 +9,6 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && \
     pip install --no-cache-dir gunicorn pymysql
 
-
 COPY . /app/
 
 RUN python - <<'PY'
@@ -62,12 +61,15 @@ for root, _, files in os.walk("/app"):
             (r'\bimport\s+app\.service\b',     'import service'),
         ])
 
-# 2a) моделі не тягнуть app.py (щоб не було циклу)
 for root, _, files in os.walk("/app"):
     for name in files:
         if not name.endswith(".py"): continue
         p = os.path.join(root, name)
-        patch(p, [(r'\bfrom\s+app\s+import\s+db\b', 'from __init__ import db')])
+        patch(p, [
+            (r'\bfrom\s+app\s+import\s+db\b', 'from __init__ import db'),
+            (r'\bfrom\s+\.\.\s+import\s+db\b', 'from __init__ import db'),   # <-- НОВЕ
+            (r'\bfrom\s+\.\.\s+import\s+create_app\b', 'from __init__ import create_app')
+        ])
 
 for root, _, files in os.walk("/app"):
     for name in files:
