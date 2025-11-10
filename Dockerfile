@@ -9,10 +9,13 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && \
     pip install --no-cache-dir gunicorn pymysql
 
+
 COPY . /app/
 
 RUN python - <<'PY'
 import os, re, io
+
+PKGS = ["controllers","dao","domain","service","root"]
 
 def patch(path, rules):
     try:
@@ -25,7 +28,7 @@ def patch(path, rules):
     if s != orig:
         io.open(path, 'w', encoding='utf-8').write(s)
 
-for pkg in ["controllers","dao","domain","service","root"]:
+for pkg in PKGS:
     d = os.path.join("/app", pkg)
     if os.path.isdir(d):
         ip = os.path.join(d, "__init__.py")
@@ -59,20 +62,24 @@ for root, _, files in os.walk("/app"):
             (r'\bimport\s+app\.service\b',     'import service'),
         ])
 
+# 2a) моделі не тягнуть app.py (щоб не було циклу)
 for root, _, files in os.walk("/app"):
     for name in files:
         if not name.endswith(".py"): continue
         p = os.path.join(root, name)
-        patch(p, [
-            (r'\bfrom\s+app\s+import\s+db\b', 'from __init__ import db'),
-        ])
+        patch(p, [(r'\bfrom\s+app\s+import\s+db\b', 'from __init__ import db')])
 
-PKGS = ["controllers","service","dao","domain","root"]
 for root, _, files in os.walk("/app"):
     for name in files:
         if not name.endswith(".py"): continue
         p = os.path.join(root, name)
-        rules = [(rf'from\s+\.\.\s*{pkg}\s+import\s+', f'from {pkg} import ') for pkg in PKGS]
+        rules = []
+        for pkg in PKGS:
+            rules += [
+                (rf'\bfrom\s+\.\.\s*{pkg}\.','from '+pkg+'.'),
+                (rf'\bfrom\s+\.\.\s*{pkg}\s+import\s+','from '+pkg+' import '),
+                (rf'\bimport\s+\.\.\s*{pkg}\b','import '+pkg),
+            ]
         patch(p, rules)
 
 f = "/app/root/__init__.py"
@@ -80,6 +87,6 @@ if os.path.exists(f):
     patch(f, [(r'from\s+app\.root\.error_handler', 'from .error_handler')])
 PY
 
-ENV PORT=8000
+ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app PORT=8000
 EXPOSE 8000
 CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8000", "wsgi:app"]
