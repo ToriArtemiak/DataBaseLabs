@@ -11,7 +11,7 @@ env:
   RDS_ID: iotlab-db
   DB_NAME: iotlab
   DB_USER: admin
-  DB_MASTER_PASS: root322
+  DB_MASTER_PASS: root1234
   RDS_SG_NAME: iotlab-rds-sg
   LAMBDA_SG_NAME: iotlab-lambda-sg
 
