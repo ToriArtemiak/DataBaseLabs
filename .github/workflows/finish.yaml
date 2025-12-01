@@ -344,7 +344,16 @@ jobs:
           set -e
           aws ecs create-cluster --cluster-name "$CLUSTER_NAME" >/dev/null 2>&1 || true
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          cat > taskdef.json <<JSON
+
+          # ensure task exec role
+          if ! aws iam get-role --role-name ecsTaskExecutionRole >/dev/null 2>&1; then
+            printf '%s' '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}' > trust.json
+            aws iam create-role --role-name ecsTaskExecutionRole --assume-role-policy-document file://trust.json >/dev/null
+            aws iam attach-role-policy --role-name ecsTaskExecutionRole --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy >/dev/null
+          fi
+
+          # task definition (важливо: маркер EOF і вгорі, і внизу — один і той самий, без пробілів)
+          cat > taskdef.json <<EOF
           {
             "family": "${EMU_TASK_FAMILY}",
             "networkMode": "awsvpc",
@@ -352,7 +361,7 @@ jobs:
             "cpu": "${EMU_CPU}",
             "memory": "${EMU_MEM}",
             "executionRoleArn": "arn:aws:iam::${ACCOUNT_ID}:role/ecsTaskExecutionRole",
-            "taskRoleArn": "arn:aws:iam::${ACCOUNT_ID}:role/ecsTaskExecutionRole",
+            "taskRoleArn":      "arn:aws:iam::${ACCOUNT_ID}:role/ecsTaskExecutionRole",
             "containerDefinitions": [{
               "name": "${EMU_CONTAINER}",
               "image": "${EMU_IMAGE}",
@@ -365,21 +374,18 @@ jobs:
               ]
             }]
           }
-          JSON
-          if ! aws iam get-role --role-name ecsTaskExecutionRole >/dev/null 2>&1; then
-            cat > trust.json <<'EOF'
-            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}
-            EOF
-            aws iam create-role --role-name ecsTaskExecutionRole --assume-role-policy-document file://trust.json >/dev/null
-            aws iam attach-role-policy --role-name ecsTaskExecutionRole --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy >/dev/null
-          fi
+          EOF
+
           aws ecs register-task-definition --cli-input-json file://taskdef.json >/dev/null
+
           aws ecs run-task \
             --launch-type FARGATE \
             --cluster "$CLUSTER_NAME" \
             --task-definition "$EMU_TASK_FAMILY" \
             --network-configuration "awsvpcConfiguration={subnets=[$SUBNET1,$SUBNET2],assignPublicIp=ENABLED}" >/dev/null
+
           echo "Emulator started → ${API_URL}/ingest"
+
 
       - name: Smoke test (send 3 events + check DB)
         run: |
