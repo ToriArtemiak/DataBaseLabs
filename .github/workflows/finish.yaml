@@ -3,38 +3,24 @@ name: Lab-3
 on:
   push:
     branches: ["lab5"]
- 
-env:
-  AWS_REGION: eu-central-1
 
-  # RDS
-  RDS_ID: iotlab-db1
+env:
+  AWS_REGION: us-east-1
+
+  RDS_ID: iotlab-db1-last-lab
   DB_NAME: iotlab
   DB_USER: admin
   DB_MASTER_PASS: root1234
-  RDS_SG_NAME: iotlab-rds-sg
-  LAMBDA_SG_NAME: iotlab-lambda-sg
+  RDS_SG_NAME: iotlab-rds-sg-last-lab
+  LAMBDA_SG_NAME: iotlab-lambda-sg-last-lab
 
-  # SQS + Lambdas + API
-  SQS_NAME: iotlab-queue
-  INGEST_LAMBDA: iotlab-ingest
-  CONSUMER_LAMBDA: iotlab-consumer
-  LAMBDA_ROLE: iotlab-lambda-role
-  API_NAME: iotlab-api
+  SQS_NAME: iotlab-queue-last-lab
+  INGEST_LAMBDA: iotlab-ingest-last-lab
+  CONSUMER_LAMBDA: iotlab-consumer-last-lab
+  HISTORY_LAMBDA: iotlab-history-last-lab
+  LAMBDA_ROLE: iotlab-lambda-role-last-lab
+  API_NAME: iotlab-api-last-lab
   STAGE: prod
-
-  # Emulator via ECS Fargate
-  ECR_REPOSITORY: iotlab-emulator
-  CLUSTER_NAME: iotlab-cluster
-  EMU_TASK_FAMILY: iotlab-emulator-task
-  EMU_CONTAINER: iotlab-emulator
-  EMU_CPU: "256"
-  EMU_MEM: "512"
-
-  # Частоти сенсорів (мс)
-  TEMP_PERIOD_MS: "50"
-  HUM_PERIOD_MS: "80"
-  LIGHT_PERIOD_MS: "100"
 
 jobs:
   deploy-iot-lab:
@@ -58,15 +44,17 @@ jobs:
           SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC_ID --query 'Subnets[?MapPublicIpOnLaunch==`true`].SubnetId' --output text)
           SUBNET1=$(echo $SUBNETS | awk '{print $1}')
           SUBNET2=$(echo $SUBNETS | awk '{print $2}')
-          if [ -z "$SUBNET1" ] || [ -z "$SUBNET2" ]; then echo "Need >=2 public subnets in default VPC"; exit 1; fi
-          echo "VPC_ID=$VPC_ID"       >> $GITHUB_ENV
-          echo "SUBNET1=$SUBNET1"     >> $GITHUB_ENV
-          echo "SUBNET2=$SUBNET2"     >> $GITHUB_ENV
+          if [ -z "$SUBNET1" ] || [ -z "$SUBNET2" ] || [ "$SUBNET1" = "None" ] || [ "$SUBNET2" = "None" ]; then
+            echo "Need >=2 public subnets in default VPC"
+            exit 1
+          fi
+          echo "VPC_ID=$VPC_ID"   >> $GITHUB_ENV
+          echo "SUBNET1=$SUBNET1" >> $GITHUB_ENV
+          echo "SUBNET2=$SUBNET2" >> $GITHUB_ENV
 
       - name: Security groups (RDS + Lambda)
         run: |
           set -e
-          # Lambda SG (egress all)
           LAMBDA_SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values="$LAMBDA_SG_NAME" Name=vpc-id,Values="$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text)
           if [ "$LAMBDA_SG_ID" = "None" ] || [ -z "$LAMBDA_SG_ID" ]; then
             LAMBDA_SG_ID=$(aws ec2 create-security-group --group-name "$LAMBDA_SG_NAME" --description "IoT Lab Lambda SG" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
@@ -74,7 +62,6 @@ jobs:
           aws ec2 revoke-security-group-egress --group-id "$LAMBDA_SG_ID" --ip-permissions '[{"IpProtocol":"-1","IpRanges":[{"CidrIp":"0.0.0.0/0"}]}]' >/dev/null 2>&1 || true
           aws ec2 authorize-security-group-egress --group-id "$LAMBDA_SG_ID" --ip-permissions '[{"IpProtocol":"-1","IpRanges":[{"CidrIp":"0.0.0.0/0"}]}]' >/dev/null 2>&1 || true
 
-          # RDS SG (3306 від Lambda SG + для демо з інтернету)
           RDS_SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values="$RDS_SG_NAME" Name=vpc-id,Values="$VPC_ID" --query 'SecurityGroups[0].GroupId' --output text)
           if [ "$RDS_SG_ID" = "None" ] || [ -z "$RDS_SG_ID" ]; then
             RDS_SG_ID=$(aws ec2 create-security-group --group-name "$RDS_SG_NAME" --description "IoT Lab RDS SG" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
@@ -135,19 +122,28 @@ jobs:
           aws iam attach-role-policy --role-name "$LAMBDA_ROLE" --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole >/dev/null 2>&1 || true
 
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
           cat > sqs-send.json <<'EOF'
           {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["sqs:SendMessage"],"Resource":"__QUEUE_ARN__"}]}
           EOF
           sed -i "s|__QUEUE_ARN__|$QUEUE_ARN|g" sqs-send.json
-          if ! aws iam get-policy --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/iotlab-sqs-send >/dev/null 2>&1; then
-            aws iam create-policy --policy-name iotlab-sqs-send --policy-document file://sqs-send.json >/dev/null
+          if ! aws iam get-policy --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/iotlab-sqs-send-last-lab >/dev/null 2>&1; then
+            aws iam create-policy --policy-name iotlab-sqs-send-last-lab --policy-document file://sqs-send.json >/dev/null
           fi
-          aws iam attach-role-policy --role-name "$LAMBDA_ROLE" --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/iotlab-sqs-send >/dev/null 2>&1 || true
+          aws iam attach-role-policy --role-name "$LAMBDA_ROLE" --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/iotlab-sqs-send-last-lab >/dev/null 2>&1 || true
+
+          cat > rds-read.json <<'EOF'
+          {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:DescribeDBInstances"],"Resource":"*"}]}
+          EOF
+          if ! aws iam get-policy --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/iotlab-rds-describe-last-lab >/dev/null 2>&1; then
+            aws iam create-policy --policy-name iotlab-rds-describe-last-lab --policy-document file://rds-read.json >/dev/null
+          fi
+          aws iam attach-role-policy --role-name "$LAMBDA_ROLE" --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/iotlab-rds-describe-last-lab >/dev/null 2>&1 || true
 
           ROLE_ARN=$(aws iam get-role --role-name "$LAMBDA_ROLE" --query 'Role.Arn' --output text)
           echo "ROLE_ARN=$ROLE_ARN" >> $GITHUB_ENV
 
-      - name: Build & deploy Lambdas (ingest -> SQS, consumer SQS -> MySQL)
+      - name: Build & deploy Lambdas (ingest -> SQS, consumer SQS -> MySQL, history -> MySQL)
         run: |
           set -e
           wait_lambda_ok () {
@@ -160,73 +156,190 @@ jobs:
             done
           }
 
-          mkdir -p lambda_ingest lambda_consumer
+          mkdir -p lambda_ingest lambda_consumer lambda_history
 
           cat > lambda_ingest/handler.py <<'PY'
-          import os, json, boto3, time
-          sqs = boto3.client('sqs')
-          QUEUE_URL = os.environ['QUEUE_URL']
-          def lambda_handler(event, context):
+          import os, json, time, base64, boto3
+          sqs = boto3.client("sqs")
+          QUEUE_URL = os.environ["QUEUE_URL"]
+          def _parse_body(event):
+              body = event.get("body") or "{}"
               if event.get("isBase64Encoded"):
-                  body = json.loads(bytearray(event["body"], "utf-8").decode())
-              else:
-                  body = json.loads(event.get("body") or "{}")
-              body.setdefault("ts", int(time.time()*1000))
-              sqs.send_message(QueueUrl=QUEUE_URL, MessageBody=json.dumps(body))
-              return {"statusCode": 202, "headers":{"Content-Type":"application/json"}, "body": json.dumps({"ok": True})}
+                  body = base64.b64decode(body).decode("utf-8")
+              return json.loads(body)
+          def lambda_handler(event, context):
+              payload = _parse_body(event)
+              payload.setdefault("ts", int(time.time() * 1000))
+              sqs.send_message(QueueUrl=QUEUE_URL, MessageBody=json.dumps(payload, ensure_ascii=False))
+              return {
+                  "statusCode": 202,
+                  "headers": {"Content-Type": "application/json"},
+                  "body": json.dumps({"ok": True})
+              }
           PY
 
           cat > lambda_consumer/handler.py <<'PY'
-          import os, json, pymysql, time
-          DB_HOST = os.environ['DB_HOST']
-          DB_NAME = os.environ['DB_NAME']
-          DB_USER = os.environ['DB_USER']
-          DB_PASS = os.environ['DB_PASS']
+          import os, json, time, pymysql
+          DB_HOST = os.environ["DB_HOST"]
+          DB_NAME = os.environ["DB_NAME"]
+          DB_USER = os.environ["DB_USER"]
+          DB_PASS = os.environ["DB_PASS"]
           def _conn():
-              return pymysql.connect(host=DB_HOST, user=DB_USER, password=DB_PASS, database=DB_NAME, autocommit=True, charset="utf8mb4")
+              return pymysql.connect(
+                  host=DB_HOST,
+                  user=DB_USER,
+                  password=DB_PASS,
+                  database=DB_NAME,
+                  autocommit=True,
+                  charset="utf8mb4",
+                  connect_timeout=10
+              )
           def _init_schema(cur):
               cur.execute("""
               CREATE TABLE IF NOT EXISTS sensor_data (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 sensor_type VARCHAR(32) NOT NULL,
-                value DOUBLE NOT NULL,
+                temp_c DOUBLE NULL,
+                humidity_pct DOUBLE NULL,
+                light_lux DOUBLE NULL,
                 lat DOUBLE NULL,
                 lon DOUBLE NULL,
-                ts BIGINT NOT NULL
+                ts BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_type_ts (sensor_type, ts)
               ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
               """)
+          def _extract_fields(p):
+              t = (p.get("type") or "").lower()
+              temp_c = p.get("temp_c")
+              humidity_pct = p.get("humidity_pct")
+              light_lux = p.get("light_lux")
+              if p.get("value") is not None:
+                  v = float(p["value"])
+                  if t == "temperature" and temp_c is None:
+                      temp_c = v
+                  elif t == "humidity" and humidity_pct is None:
+                      humidity_pct = v
+                  elif t == "light" and light_lux is None:
+                      light_lux = v
+              return t, temp_c, humidity_pct, light_lux
           def lambda_handler(event, context):
               con = _conn()
               try:
                   with con.cursor() as cur:
                       _init_schema(cur)
-                      for rec in event.get('Records', []):
-                          payload = json.loads(rec['body'])
+                      for rec in event.get("Records", []):
+                          p = json.loads(rec["body"])
+                          sensor_type, temp_c, humidity_pct, light_lux = _extract_fields(p)
+                          ts = int(p.get("ts", time.time() * 1000))
                           cur.execute(
-                            "INSERT INTO sensor_data(sensor_type, value, lat, lon, ts) VALUES(%s,%s,%s,%s,%s)",
-                            (
-                              payload.get('type'),
-                              float(payload.get('value', 0)),
-                              payload.get('lat'),
-                              payload.get('lon'),
-                              int(payload.get('ts', time.time()*1000))
-                            )
+                              """
+                              INSERT INTO sensor_data(sensor_type, temp_c, humidity_pct, light_lux, lat, lon, ts)
+                              VALUES (%s,%s,%s,%s,%s,%s,%s)
+                              """,
+                              (sensor_type, temp_c, humidity_pct, light_lux, p.get("lat"), p.get("lon"), ts)
                           )
               finally:
                   con.close()
               return {"ok": True}
           PY
 
+          cat > lambda_history/handler.py <<'PY'
+          import os, json, pymysql
+          DB_HOST = os.environ["DB_HOST"]
+          DB_NAME = os.environ["DB_NAME"]
+          DB_USER = os.environ["DB_USER"]
+          DB_PASS = os.environ["DB_PASS"]
+          def _conn():
+              return pymysql.connect(
+                  host=DB_HOST,
+                  user=DB_USER,
+                  password=DB_PASS,
+                  database=DB_NAME,
+                  autocommit=True,
+                  charset="utf8mb4",
+                  connect_timeout=10,
+                  cursorclass=pymysql.cursors.DictCursor
+              )
+          def _init_schema(cur):
+              cur.execute("""
+              CREATE TABLE IF NOT EXISTS sensor_data (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                sensor_type VARCHAR(32) NOT NULL,
+                temp_c DOUBLE NULL,
+                humidity_pct DOUBLE NULL,
+                light_lux DOUBLE NULL,
+                lat DOUBLE NULL,
+                lon DOUBLE NULL,
+                ts BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_type_ts (sensor_type, ts)
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+              """)
+          def _resp(code, obj):
+              return {
+                  "statusCode": code,
+                  "headers": {
+                      "Content-Type": "application/json",
+                      "Access-Control-Allow-Origin": "*"
+                  },
+                  "body": json.dumps(obj, ensure_ascii=False)
+              }
+          def lambda_handler(event, context):
+              qs = event.get("queryStringParameters") or {}
+              sensor_type = (qs.get("type") or "").lower().strip()
+              limit = int(qs.get("limit") or "50")
+              if limit < 1: limit = 1
+              if limit > 500: limit = 500
+              con = _conn()
+              try:
+                  with con.cursor() as cur:
+                      _init_schema(cur)
+                      if sensor_type:
+                          cur.execute(
+                              """
+                              SELECT id, sensor_type, temp_c, humidity_pct, light_lux, lat, lon, ts, created_at
+                              FROM sensor_data
+                              WHERE sensor_type = %s
+                              ORDER BY id DESC
+                              LIMIT %s
+                              """,
+                              (sensor_type, limit)
+                          )
+                      else:
+                          cur.execute(
+                              """
+                              SELECT id, sensor_type, temp_c, humidity_pct, light_lux, lat, lon, ts, created_at
+                              FROM sensor_data
+                              ORDER BY id DESC
+                              LIMIT %s
+                              """,
+                              (limit,)
+                          )
+                      rows = cur.fetchall()
+              finally:
+                  con.close()
+              return _resp(200, {"ok": True, "items": rows})
+          PY
+
           python -m pip install --upgrade pip >/dev/null
           pip install -q -t lambda_consumer/python pymysql
+          pip install -q -t lambda_history/python pymysql
+
           (cd lambda_ingest && zip -rq ../ingest.zip .)
           (cd lambda_consumer && zip -rq ../consumer_layer.zip python)
           (cd lambda_consumer && zip -rq ../consumer_code.zip handler.py)
+          (cd lambda_history && zip -rq ../history_layer.zip python)
+          (cd lambda_history && zip -rq ../history_code.zip handler.py)
 
-          LAYER_ARN=$(aws lambda publish-layer-version --layer-name iotlab-pymysql --zip-file fileb://consumer_layer.zip --compatible-runtimes python3.12 --query 'LayerVersionArn' --output text)
+          LAYER_CONSUMER_ARN=$(aws lambda publish-layer-version --layer-name iotlab-pymysql-consumer-last-lab --zip-file fileb://consumer_layer.zip --compatible-runtimes python3.12 --query 'LayerVersionArn' --output text)
+          LAYER_HISTORY_ARN=$(aws lambda publish-layer-version --layer-name iotlab-pymysql-history-last-lab --zip-file fileb://history_layer.zip --compatible-runtimes python3.12 --query 'LayerVersionArn' --output text)
 
           if aws lambda get-function --function-name "$INGEST_LAMBDA" >/dev/null 2>&1; then
             aws lambda update-function-code --function-name "$INGEST_LAMBDA" --zip-file fileb://ingest.zip >/dev/null
+            wait_lambda_ok "$INGEST_LAMBDA"
+            aws lambda update-function-configuration --function-name "$INGEST_LAMBDA" \
+              --environment "Variables={QUEUE_URL=$QUEUE_URL}" >/dev/null
             wait_lambda_ok "$INGEST_LAMBDA"
           else
             aws lambda create-function --function-name "$INGEST_LAMBDA" \
@@ -241,7 +354,7 @@ jobs:
             aws lambda update-function-code --function-name "$CONSUMER_LAMBDA" --zip-file fileb://consumer_code.zip >/dev/null
             wait_lambda_ok "$CONSUMER_LAMBDA"
             aws lambda update-function-configuration --function-name "$CONSUMER_LAMBDA" \
-              --layers "$LAYER_ARN" \
+              --layers "$LAYER_CONSUMER_ARN" \
               --vpc-config "SubnetIds=$SUBNET1,$SUBNET2,SecurityGroupIds=$LAMBDA_SG_ID" \
               --environment "Variables={DB_HOST=$DB_HOST,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASS=$DB_MASTER_PASS}" >/dev/null
             wait_lambda_ok "$CONSUMER_LAMBDA"
@@ -250,10 +363,29 @@ jobs:
               --runtime python3.12 --handler handler.lambda_handler \
               --role "$ROLE_ARN" --timeout 30 --memory-size 256 \
               --zip-file fileb://consumer_code.zip \
-              --layers "$LAYER_ARN" \
+              --layers "$LAYER_CONSUMER_ARN" \
               --vpc-config "SubnetIds=$SUBNET1,$SUBNET2,SecurityGroupIds=$LAMBDA_SG_ID" \
               --environment "Variables={DB_HOST=$DB_HOST,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASS=$DB_MASTER_PASS}" >/dev/null
             wait_lambda_ok "$CONSUMER_LAMBDA"
+          fi
+
+          if aws lambda get-function --function-name "$HISTORY_LAMBDA" >/dev/null 2>&1; then
+            aws lambda update-function-code --function-name "$HISTORY_LAMBDA" --zip-file fileb://history_code.zip >/dev/null
+            wait_lambda_ok "$HISTORY_LAMBDA"
+            aws lambda update-function-configuration --function-name "$HISTORY_LAMBDA" \
+              --layers "$LAYER_HISTORY_ARN" \
+              --vpc-config "SubnetIds=$SUBNET1,$SUBNET2,SecurityGroupIds=$LAMBDA_SG_ID" \
+              --environment "Variables={DB_HOST=$DB_HOST,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASS=$DB_MASTER_PASS}" >/dev/null
+            wait_lambda_ok "$HISTORY_LAMBDA"
+          else
+            aws lambda create-function --function-name "$HISTORY_LAMBDA" \
+              --runtime python3.12 --handler handler.lambda_handler \
+              --role "$ROLE_ARN" --timeout 30 --memory-size 256 \
+              --zip-file fileb://history_code.zip \
+              --layers "$LAYER_HISTORY_ARN" \
+              --vpc-config "SubnetIds=$SUBNET1,$SUBNET2,SecurityGroupIds=$LAMBDA_SG_ID" \
+              --environment "Variables={DB_HOST=$DB_HOST,DB_NAME=$DB_NAME,DB_USER=$DB_USER,DB_PASS=$DB_MASTER_PASS}" >/dev/null
+            wait_lambda_ok "$HISTORY_LAMBDA"
           fi
 
           MAPPING_ID=$(aws lambda list-event-source-mappings --function-name "$CONSUMER_LAMBDA" --query "EventSourceMappings[?EventSourceArn=='$QUEUE_ARN'].UUID | [0]" --output text)
@@ -261,161 +393,92 @@ jobs:
             aws lambda create-event-source-mapping --function-name "$CONSUMER_LAMBDA" --event-source-arn "$QUEUE_ARN" --batch-size 10 >/dev/null
           fi
 
-      - name: API Gateway for ingest Lambda
+      - name: API Gateway routes (POST /ingest, GET /history)
         run: |
           set -e
           API_ID=$(aws apigateway get-rest-apis --query "items[?name=='$API_NAME'].id | [0]" --output text)
           if [ "$API_ID" = "None" ] || [ -z "$API_ID" ]; then
-            API_ID=$(aws apigateway create-rest-api --name "$API_NAME" --region "$AWS_REGION" --query 'id' --output text)
+            API_ID=$(aws apigateway create-rest-api --name "$API_NAME" --query 'id' --output text)
           fi
+
           ROOT_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?path=='/'].id" --output text)
 
-          RES_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?path=='/ingest'].id" --output text)
-          if [ "$RES_ID" = "None" ] || [ -z "$RES_ID" ]; then
-            RES_ID=$(aws apigateway create-resource --rest-api-id "$API_ID" --parent-id "$ROOT_ID" --path-part ingest --query 'id' --output text)
+          ING_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?path=='/ingest'].id" --output text)
+          if [ "$ING_ID" = "None" ] || [ -z "$ING_ID" ]; then
+            ING_ID=$(aws apigateway create-resource --rest-api-id "$API_ID" --parent-id "$ROOT_ID" --path-part ingest --query 'id' --output text)
           fi
 
-          aws apigateway put-method --rest-api-id "$API_ID" --resource-id "$RES_ID" --http-method POST --authorization-type "NONE" >/dev/null 2>&1 || true
+          HIS_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?path=='/history'].id" --output text)
+          if [ "$HIS_ID" = "None" ] || [ -z "$HIS_ID" ]; then
+            HIS_ID=$(aws apigateway create-resource --rest-api-id "$API_ID" --parent-id "$ROOT_ID" --path-part history --query 'id' --output text)
+          fi
 
-          LAMBDA_ARN=$(aws lambda get-function --function-name "$INGEST_LAMBDA" --query 'Configuration.FunctionArn' --output text)
-          URI="arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations"
-          aws apigateway put-integration --rest-api-id "$API_ID" --resource-id "$RES_ID" --http-method POST \
-            --type AWS_PROXY --integration-http-method POST --uri "$URI" >/dev/null 2>&1 || true
+          aws apigateway put-method --rest-api-id "$API_ID" --resource-id "$ING_ID" --http-method POST --authorization-type "NONE" >/dev/null 2>&1 || true
+          aws apigateway put-method --rest-api-id "$API_ID" --resource-id "$HIS_ID" --http-method GET  --authorization-type "NONE" >/dev/null 2>&1 || true
+
+          ING_LAMBDA_ARN=$(aws lambda get-function --function-name "$INGEST_LAMBDA" --query 'Configuration.FunctionArn' --output text)
+          HIS_LAMBDA_ARN=$(aws lambda get-function --function-name "$HISTORY_LAMBDA" --query 'Configuration.FunctionArn' --output text)
+
+          ING_URI="arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${ING_LAMBDA_ARN}/invocations"
+          HIS_URI="arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${HIS_LAMBDA_ARN}/invocations"
+
+          aws apigateway put-integration --rest-api-id "$API_ID" --resource-id "$ING_ID" --http-method POST \
+            --type AWS_PROXY --integration-http-method POST --uri "$ING_URI" >/dev/null 2>&1 || true
+
+          aws apigateway put-integration --rest-api-id "$API_ID" --resource-id "$HIS_ID" --http-method GET \
+            --type AWS_PROXY --integration-http-method POST --uri "$HIS_URI" >/dev/null 2>&1 || true
+
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
           aws lambda add-permission --function-name "$INGEST_LAMBDA" --statement-id "apigw-post-ingest" \
             --action lambda:InvokeFunction --principal apigateway.amazonaws.com \
-            --source-arn "arn:aws:execute-api:${AWS_REGION}:$(aws sts get-caller-identity --query Account --output text):${API_ID}/*/POST/ingest" >/dev/null 2>&1 || true
+            --source-arn "arn:aws:execute-api:${AWS_REGION}:${ACCOUNT_ID}:${API_ID}/*/POST/ingest" >/dev/null 2>&1 || true
+
+          aws lambda add-permission --function-name "$HISTORY_LAMBDA" --statement-id "apigw-get-history" \
+            --action lambda:InvokeFunction --principal apigateway.amazonaws.com \
+            --source-arn "arn:aws:execute-api:${AWS_REGION}:${ACCOUNT_ID}:${API_ID}/*/GET/history" >/dev/null 2>&1 || true
 
           aws apigateway create-deployment --rest-api-id "$API_ID" --stage-name "$STAGE" >/dev/null
+
           API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/${STAGE}"
           echo "API_URL=$API_URL" >> $GITHUB_ENV
-          echo "API URL: $API_URL/ingest"
+          echo "API URL: $API_URL"
+          echo "POST  $API_URL/ingest"
+          echo "GET   $API_URL/history?type=temperature&limit=50"
 
-      - name: Ensure ECR repo
-        run: |
-          set -e
-          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
-
-      - name: Login to ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build & push emulator
-        env:
-          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
-        run: |
-          set -e
-          mkdir -p emu
-          cat > emu/Dockerfile <<'DOCKER'
-          FROM python:3.11-slim
-          WORKDIR /app
-          RUN pip install --no-cache-dir requests
-          COPY run.py .
-          CMD ["python","run.py"]
-          DOCKER
-          cat > emu/run.py <<'PY'
-          import os, time, json, random, threading, requests
-          API = os.getenv("TARGET", "") + "/ingest"
-          TEMP_MS = int(os.getenv("TEMP_MS","50"))
-          HUM_MS  = int(os.getenv("HUM_MS","80"))
-          LUX_MS  = int(os.getenv("LUX_MS","100"))
-          def loop(name, period_ms, gen):
-              while True:
-                  payload = {"type": name, "value": gen(), "lat": 49.84, "lon": 24.03}
-                  try:
-                      requests.post(API, data=json.dumps(payload), timeout=5)
-                  except Exception:
-                      pass
-                  time.sleep(max(0.02, period_ms/1000.0))
-          threads = [
-              threading.Thread(target=loop, args=("temperature", TEMP_MS, lambda: round(random.uniform(18, 28), 2)), daemon=True),
-              threading.Thread(target=loop, args=("humidity", HUM_MS,    lambda: round(random.uniform(40, 70), 1)), daemon=True),
-              threading.Thread(target=loop, args=("light", LUX_MS,       lambda: round(random.uniform(100, 800), 0)), daemon=True),
-          ]
-          [t.start() for t in threads]
-          while True: time.sleep(3600)
-          PY
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest emu
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "EMU_IMAGE=$ECR_REGISTRY/$ECR_REPOSITORY:latest" >> $GITHUB_ENV
-
-      - name: Run emulator once on Fargate
-        run: |
-          set -e
-          aws ecs create-cluster --cluster-name "$CLUSTER_NAME" >/dev/null 2>&1 || true
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-
-          # ensure task exec role
-          if ! aws iam get-role --role-name ecsTaskExecutionRole >/dev/null 2>&1; then
-            printf '%s' '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}' > trust.json
-            aws iam create-role --role-name ecsTaskExecutionRole --assume-role-policy-document file://trust.json >/dev/null
-            aws iam attach-role-policy --role-name ecsTaskExecutionRole --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy >/dev/null
-          fi
-
-          # task definition (важливо: маркер EOF і вгорі, і внизу — один і той самий, без пробілів)
-          cat > taskdef.json <<EOF
-          {
-            "family": "${EMU_TASK_FAMILY}",
-            "networkMode": "awsvpc",
-            "requiresCompatibilities": ["FARGATE"],
-            "cpu": "${EMU_CPU}",
-            "memory": "${EMU_MEM}",
-            "executionRoleArn": "arn:aws:iam::${ACCOUNT_ID}:role/ecsTaskExecutionRole",
-            "taskRoleArn":      "arn:aws:iam::${ACCOUNT_ID}:role/ecsTaskExecutionRole",
-            "containerDefinitions": [{
-              "name": "${EMU_CONTAINER}",
-              "image": "${EMU_IMAGE}",
-              "essential": true,
-              "environment": [
-                {"name":"TARGET","value":"${API_URL}"},
-                {"name":"TEMP_MS","value":"${TEMP_PERIOD_MS}"},
-                {"name":"HUM_MS","value":"${HUM_PERIOD_MS}"},
-                {"name":"LUX_MS","value":"${LIGHT_PERIOD_MS}"}
-              ]
-            }]
-          }
-          EOF
-
-          aws ecs register-task-definition --cli-input-json file://taskdef.json >/dev/null
-
-          aws ecs run-task \
-            --launch-type FARGATE \
-            --cluster "$CLUSTER_NAME" \
-            --task-definition "$EMU_TASK_FAMILY" \
-            --network-configuration "awsvpcConfiguration={subnets=[$SUBNET1,$SUBNET2],assignPublicIp=ENABLED}" >/dev/null
-
-          echo "Emulator started → ${API_URL}/ingest"
-
-
-      - name: Smoke test (send 3 events + check DB)
+      - name: Smoke test (send 3 events + query history)
         run: |
           set -e
           sudo apt-get update -y
-          sudo apt-get install -y mysql-client curl jq
-          for p in \
-            '{"type":"temperature","value":24.7,"lat":49.84,"lon":24.03}' \
-            '{"type":"humidity","value":55.2,"lat":49.84,"lon":24.03}' \
-            '{"type":"light","value":350,"lat":49.84,"lon":24.03}'; do
-            curl -s -X POST "$API_URL/ingest" -H 'Content-Type: application/json' -d "$p" >/dev/null || true
-          done
-          echo "Waiting for consumer writes..."
-          sleep 25
-          mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_MASTER_PASS" "$DB_NAME" -e "SELECT COUNT(*) AS cnt FROM sensor_data; SELECT * FROM sensor_data ORDER BY id DESC LIMIT 5;"
+          sudo apt-get install -y curl jq
 
-      - name: Print MySQL connect command (easy copy-paste)
+          curl -s -X POST "$API_URL/ingest" -H 'Content-Type: application/json' \
+            -d '{"type":"temperature","temp_c":24.7,"lat":49.84,"lon":24.03,"ts":1733160000000}' >/dev/null
+          curl -s -X POST "$API_URL/ingest" -H 'Content-Type: application/json' \
+            -d '{"type":"humidity","humidity_pct":55.2,"lat":49.84,"lon":24.03,"ts":1733160000000}' >/dev/null
+          curl -s -X POST "$API_URL/ingest" -H 'Content-Type: application/json' \
+            -d '{"type":"light","light_lux":350,"lat":49.84,"lon":24.03,"ts":1733160000000}' >/dev/null
+
+          sleep 20
+
+          curl -s "$API_URL/history?limit=5" | jq .
+          curl -s "$API_URL/history?type=temperature&limit=5" | jq .
+
+      - name: Print endpoints + MySQL command
         run: |
-          echo
-          echo "Use this from your laptop:"
+          echo "POST  ${API_URL}/ingest"
+          echo "GET   ${API_URL}/history?type=temperature&limit=50"
           echo "mysql -h ${DB_HOST} -u ${DB_USER} -p'${DB_MASTER_PASS}' ${DB_NAME}"
+
           cat >> "$GITHUB_STEP_SUMMARY" <<MD
+          ### Endpoints
+          \`\`\`
+          POST  ${API_URL}/ingest
+          GET   ${API_URL}/history?type=temperature&limit=50
+          \`\`\`
+
           ### MySQL connect
           \`\`\`bash
           mysql -h ${DB_HOST} -u ${DB_USER} -p'${DB_MASTER_PASS}' ${DB_NAME}
-          \`\`\`
-
-          ### Quick query
-          \`\`\`sql
-          SELECT COUNT(*) AS cnt FROM sensor_data;
-          SELECT * FROM sensor_data ORDER BY id DESC LIMIT 10;
           \`\`\`
           MD
